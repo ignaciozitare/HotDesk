@@ -717,7 +717,7 @@ function LoginScreen({db,onLogin}){
         <div style={{position:"relative",marginBottom:error?10:24}}>
           <input value={pass} onChange={e=>{setPass(e.target.value);setError("");}} onKeyDown={e=>e.key==="Enter"&&go()}
             placeholder="Contraseña" type={showPass?"text":"password"}
-            style={{width:"100%",background:"#060c14",border:"1px solid "+(error?"#7f1d1d":"#162032"),color:"#dde6f0",padding:"11px 42px 11px 14px",borderRadius:8,fontSize:15,outline:"none",fontFamily:"inherit"}}
+            style={{width:"100%",background:"#060c14",border:"1px solid "+(error?"#7f1d1d":"#162032"),color:"#dde6f0",padding:"11px 14px",borderRadius:8,fontSize:15,outline:"none",fontFamily:"inherit"}}
             onFocus={e=>e.target.style.borderColor=error?"#dc2626":"#22d3ee"} onBlur={e=>e.target.style.borderColor=error?"#7f1d1d":"#162032"}/>
           <button onClick={()=>setShowPass(v=>!v)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:"#2a4060",cursor:"pointer",fontSize:16,padding:2}}>
             {showPass?"🙈":"👁"}

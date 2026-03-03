@@ -20,14 +20,22 @@ function fmtMY(y,m){return new Date(y,m,1).toLocaleDateString("es-ES",{month:"lo
 function sName(s){return(s||"").split(" ")[0].slice(0,9);}
 function isWE(iso){const d=fromISO(iso).getDay();return d===0||d===6;}
 
-// ── localStorage persistence (replaces window.storage) ──────────────────────
-const DB_KEY="hotdesk-v11";
+// ── localStorage persistence ──────────────────────────────────────────────────
+const DB_KEY="hotdesk-v12";
+const DEFAULT_ADMIN={name:"Admin",password:"admin",role:"admin"};
+
 function loadDB(){
   try{
     const raw=localStorage.getItem(DB_KEY);
-    if(raw){const d=JSON.parse(raw);if(!d.users)d.users=[];return d;}
+    if(raw){
+      const d=JSON.parse(raw);
+      if(!d.users)d.users=[];
+      // migrate: ensure at least one admin exists
+      if(!d.users.find(u=>u.role==="admin"))d.users.unshift(DEFAULT_ADMIN);
+      return d;
+    }
   }catch(e){}
-  return{fixed:{},res:[],users:[]};
+  return{fixed:{},res:[],users:[DEFAULT_ADMIN]};
 }
 function saveDB(d){
   try{localStorage.setItem(DB_KEY,JSON.stringify(d));}catch(e){}
@@ -100,10 +108,19 @@ export default function App(){
   function prevM(){if(tm===0){setTy(y=>y-1);setTm(11);}else setTm(m=>m-1);}
   function nextM(){if(tm===11){setTy(y=>y+1);setTm(0);}else setTm(m=>m+1);}
 
-  if(!user)return <LoginScreen db={db} onLogin={setUser}/>;
+  function handleLogin(loggedUser){
+    setUser(loggedUser);
+    setView("map");
+  }
+
+  if(!user)return <LoginScreen db={db} onLogin={handleLogin}/>;
 
   const isAdmin=user.role==="admin";
   const freeN=SEATS.filter(s=>stOf(s.id,TODAY)==="free").length;
+  const roleLabel=isAdmin?"⚙ Admin":user.role==="fixed"?"📌 Fijo":"💻 Hotdesk";
+  const roleBorder=isAdmin?"#4c1d95":user.role==="fixed"?C_FIX+"80":"#075985";
+  const roleColor=isAdmin?"#c4b5fd":user.role==="fixed"?"#fda4af":"#67e8f9";
+  const roleBg=isAdmin?"#1a0930":user.role==="fixed"?"#1a0514":"#041e2c";
 
   return(
     <div style={{fontFamily:"'Outfit',system-ui,sans-serif",background:"#080e17",color:"#dde6f0",minHeight:"100vh",display:"flex",flexDirection:"column"}}>
@@ -124,8 +141,8 @@ export default function App(){
             ⚙ Panel Admin{view==="admin"?" ✕":""}
           </button>
         )}
-        <div style={{background:isAdmin?"#1a0930":"#041e2c",border:"1px solid "+(isAdmin?"#4c1d95":"#075985"),borderRadius:20,padding:"4px 13px",fontSize:12,color:isAdmin?"#c4b5fd":"#67e8f9"}}>
-          {isAdmin?"⚙":"👤"} {user.name}
+        <div style={{background:roleBg,border:"1px solid "+roleBorder,borderRadius:20,padding:"4px 13px",fontSize:12,color:roleColor}}>
+          {roleLabel} · {user.name}
         </div>
         <button onClick={()=>setUser(null)} style={{background:"#0b1422",border:"1px solid #162032",color:"#374151",padding:"5px 10px",borderRadius:7,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
       </div>
@@ -168,20 +185,40 @@ function AdminPanel({db,save,notify,today,stOf,resOf,onReserveForUser,onToggleFi
   const[calM,setCalM]=useState(new Date().getMonth());
   const[selDates,setSelDates]=useState([]);
   const[newName,setNewName]=useState("");
+  const[newPass,setNewPass]=useState("");
   const[newRole,setNewRole]=useState("hotdesk");
+  const[showPass,setShowPass]=useState({});
+  const[editPass,setEditPass]=useState({});
 
   const users=db.users||[];
   const hotdeskUsers=users.filter(u=>u.role==="hotdesk");
   const fixedUsers=users.filter(u=>u.role==="fixed");
+  const adminUsers=users.filter(u=>u.role==="admin");
 
   function addUser(){
     if(!newName.trim())return;
+    if(!newPass.trim()){notify("La contraseña no puede estar vacía.",true);return;}
     if(users.find(u=>u.name.toLowerCase()===newName.trim().toLowerCase())){notify("El usuario ya existe.",true);return;}
-    save({...db,users:[...users,{name:newName.trim(),role:newRole}]});
-    setNewName("");notify("Usuario '"+newName.trim()+"' añadido");
+    save({...db,users:[...users,{name:newName.trim(),password:newPass.trim(),role:newRole}]});
+    setNewName("");setNewPass("");
+    notify("Usuario '"+newName.trim()+"' añadido");
   }
-  function removeUser(name){save({...db,users:users.filter(u=>u.name!==name)});notify("Usuario eliminado");}
-  function setUserRole(name,role){save({...db,users:users.map(u=>u.name===name?{...u,role}:u)});notify("Rol actualizado");}
+  function removeUser(name){
+    if(adminUsers.length===1&&adminUsers[0].name===name){notify("No puedes eliminar el único administrador.",true);return;}
+    save({...db,users:users.filter(u=>u.name!==name)});
+    notify("Usuario eliminado");
+  }
+  function setUserRole(name,role){
+    if(role!=="admin"&&adminUsers.length===1&&adminUsers[0].name===name){notify("Debe existir al menos un administrador.",true);return;}
+    save({...db,users:users.map(u=>u.name===name?{...u,role}:u)});
+    notify("Rol actualizado");
+  }
+  function updatePassword(name,pwd){
+    if(!pwd.trim()){notify("La contraseña no puede estar vacía.",true);return;}
+    save({...db,users:users.map(u=>u.name===name?{...u,password:pwd.trim()}:u)});
+    setEditPass(p=>({...p,[name]:""}));
+    notify("Contraseña actualizada para "+name);
+  }
   function removeFixed(sid){const f={...db.fixed};delete f[sid];save({...db,fixed:f});notify("Puesto "+sid+" desbloqueado");}
 
   const daysInMo=daysInMonth(calY,calM),firstDow=firstMon(calY,calM);
@@ -199,6 +236,9 @@ function AdminPanel({db,save,notify,today,stOf,resOf,onReserveForUser,onToggleFi
     setSelSeat(null);setSelUser("");setSelDates([]);setAsFixed(false);
   }
   const DL=["Lu","Ma","Mi","Ju","Vi","Sá","Do"];
+
+  const roleColor={admin:"#c4b5fd",fixed:C_FIX,hotdesk:"#67e8f9"};
+  const roleLabel={admin:"⚙ Admin",fixed:"📌 Fijo",hotdesk:"💻 Hotdesk"};
 
   return(
     <div style={{maxWidth:980,margin:"0 auto",animation:"hdFade .3s ease"}}>
@@ -247,6 +287,7 @@ function AdminPanel({db,save,notify,today,stOf,resOf,onReserveForUser,onToggleFi
                 style={{width:"100%",background:"#060c14",border:"1px solid "+(selUser?"#0891b2":"#162032"),color:selUser?"#bae6fd":"#3a5a7a",padding:"9px 12px",borderRadius:7,fontSize:13,outline:"none",fontFamily:"inherit",marginBottom:16,cursor:"pointer"}}>
                 <option value="">— Seleccionar usuario —</option>
                 {users.length===0&&<option disabled>No hay usuarios registrados</option>}
+                {adminUsers.length>0&&<optgroup label="── Admin">{adminUsers.map(u=><option key={u.name} value={u.name}>⚙ {u.name}</option>)}</optgroup>}
                 {fixedUsers.length>0&&<optgroup label="── Puesto fijo">{fixedUsers.map(u=><option key={u.name} value={u.name}>📌 {u.name}</option>)}</optgroup>}
                 {hotdeskUsers.length>0&&<optgroup label="── Hotdesk">{hotdeskUsers.map(u=><option key={u.name} value={u.name}>💻 {u.name}</option>)}</optgroup>}
               </select>
@@ -304,48 +345,107 @@ function AdminPanel({db,save,notify,today,stOf,resOf,onReserveForUser,onToggleFi
       )}
 
       {tab==="users"&&(
-        <div style={{maxWidth:560}}>
+        <div style={{maxWidth:600}}>
+          {/* Add user */}
           <div style={{background:"#0b1422",border:"1px solid #162032",borderRadius:10,padding:18,marginBottom:20}}>
             <div style={{fontSize:10,color:"#1e3a5f",fontWeight:700,letterSpacing:2,marginBottom:12}}>AÑADIR USUARIO</div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              <input value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addUser()} placeholder="Nombre completo"
-                style={{flex:1,minWidth:160,background:"#060c14",border:"1px solid #162032",color:"#dde6f0",padding:"9px 12px",borderRadius:7,fontSize:13,outline:"none",fontFamily:"inherit"}}
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
+              <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Nombre completo"
+                style={{flex:"1 1 160px",background:"#060c14",border:"1px solid #162032",color:"#dde6f0",padding:"9px 12px",borderRadius:7,fontSize:13,outline:"none",fontFamily:"inherit"}}
                 onFocus={e=>e.target.style.borderColor="#22d3ee"} onBlur={e=>e.target.style.borderColor="#162032"}/>
-              <select value={newRole} onChange={e=>setNewRole(e.target.value)}
-                style={{background:"#060c14",border:"1px solid #162032",color:"#dde6f0",padding:"9px 12px",borderRadius:7,fontSize:13,outline:"none",fontFamily:"inherit",cursor:"pointer"}}>
-                <option value="hotdesk">💻 Hotdesk</option>
-                <option value="fixed">📌 Puesto fijo</option>
-              </select>
-              <Btn primary onClick={addUser} disabled={!newName.trim()}>+ Añadir</Btn>
+              <div style={{position:"relative",flex:"1 1 140px"}}>
+                <input value={newPass} onChange={e=>setNewPass(e.target.value)} placeholder="Contraseña"
+                  type={showPass.__new?"text":"password"}
+                  style={{width:"100%",background:"#060c14",border:"1px solid #162032",color:"#dde6f0",padding:"9px 36px 9px 12px",borderRadius:7,fontSize:13,outline:"none",fontFamily:"inherit"}}
+                  onFocus={e=>e.target.style.borderColor="#22d3ee"} onBlur={e=>e.target.style.borderColor="#162032"}/>
+                <button onClick={()=>setShowPass(p=>({...p,__new:!p.__new}))} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:"#3a5a7a",cursor:"pointer",fontSize:13,padding:2}}>
+                  {showPass.__new?"🙈":"👁"}
+                </button>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <div style={{display:"flex",background:"#060c14",border:"1px solid #162032",borderRadius:7,padding:3,gap:2,flex:1}}>
+                {[["hotdesk","💻 Hotdesk"],["fixed","📌 Fijo"],["admin","⚙ Admin"]].map(([v,l])=>(
+                  <button key={v} onClick={()=>setNewRole(v)} style={{flex:1,border:"none",padding:"6px 8px",borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:500,fontFamily:"inherit",background:newRole===v?(v==="admin"?"#2e1065":v==="fixed"?"#1a0514":"#041e2c"):"transparent",color:newRole===v?roleColor[v]:"#2a4060",transition:"all .12s"}}>{l}</button>
+                ))}
+              </div>
+              <Btn primary onClick={addUser} disabled={!newName.trim()||!newPass.trim()}>+ Añadir</Btn>
             </div>
           </div>
+
+          {/* User list */}
           {users.length===0?(
-            <div style={{color:"#1e3a5f",fontSize:13,textAlign:"center",padding:40,background:"#0b1422",border:"1px solid #162032",borderRadius:10}}>No hay usuarios registrados.<br/>Añade el primero arriba.</div>
+            <div style={{color:"#1e3a5f",fontSize:13,textAlign:"center",padding:40,background:"#0b1422",border:"1px solid #162032",borderRadius:10}}>No hay usuarios registrados.</div>
           ):(
             <div>
               <div style={{fontSize:10,color:"#1e3a5f",fontWeight:700,letterSpacing:2,marginBottom:10}}>USUARIOS ({users.length})</div>
-              {users.map(u=>(
-                <div key={u.name} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#0b1422",border:"1px solid #162032",borderRadius:8,marginBottom:6}}>
-                  <div style={{width:34,height:34,borderRadius:"50%",background:u.role==="fixed"?C_FIX+"20":"#041e2c",border:"1.5px solid "+(u.role==="fixed"?C_FIX:"#075985"),display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0}}>{u.role==="fixed"?"📌":"💻"}</div>
-                  <div style={{flex:1}}>
-                    <div style={{fontSize:13,fontWeight:600,color:"#dde6f0"}}>{u.name}</div>
-                    <div style={{fontSize:10,color:u.role==="fixed"?C_FIX:"#0891b2",marginTop:1}}>{u.role==="fixed"?"Puesto fijo":"Hotdesk"}{u.role==="fixed"&&Object.entries(db.fixed).find(([,v])=>v===u.name)&&<span style={{color:"#6b1a1a",marginLeft:6}}>→ {Object.entries(db.fixed).find(([,v])=>v===u.name)[0]}</span>}</div>
+              {users.map(u=>{
+                const rc=roleColor[u.role]||"#67e8f9";
+                const isEditingPass=editPass[u.name]!==undefined;
+                const fixedSeat=Object.entries(db.fixed).find(([,v])=>v===u.name);
+                return(
+                  <div key={u.name} style={{background:"#0b1422",border:"1px solid #162032",borderRadius:8,marginBottom:8,overflow:"hidden"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px"}}>
+                      <div style={{width:36,height:36,borderRadius:"50%",background:u.role==="admin"?"#1a0930":u.role==="fixed"?"#1a0514":"#041e2c",border:"1.5px solid "+rc,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0}}>
+                        {u.role==="admin"?"⚙":u.role==="fixed"?"📌":"💻"}
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,color:"#dde6f0"}}>{u.name}</div>
+                        <div style={{fontSize:10,color:rc,marginTop:1}}>
+                          {roleLabel[u.role]}
+                          {fixedSeat&&<span style={{color:"#6b1a1a",marginLeft:6}}>→ {fixedSeat[0]}</span>}
+                        </div>
+                      </div>
+                      {/* Role selector */}
+                      <div style={{display:"flex",background:"#060c14",border:"1px solid #162032",borderRadius:6,padding:2,gap:1}}>
+                        {[["hotdesk","💻"],["fixed","📌"],["admin","⚙"]].map(([v,icon])=>(
+                          <button key={v} onClick={()=>setUserRole(u.name,v)} title={roleLabel[v]}
+                            style={{border:"none",padding:"4px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontFamily:"inherit",background:u.role===v?(v==="admin"?"#2e1065":v==="fixed"?"#1a0514":"#041e2c"):"transparent",color:u.role===v?roleColor[v]:"#2a4060",transition:"all .12s"}}>
+                            {icon}
+                          </button>
+                        ))}
+                      </div>
+                      {/* Edit pass toggle */}
+                      <button onClick={()=>setEditPass(p=>isEditingPass?Object.fromEntries(Object.entries(p).filter(([k])=>k!==u.name)):{...p,[u.name]:""})}
+                        style={{background:"transparent",border:"1px solid #1e2a3a",color:"#3a5a7a",padding:"5px 9px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}
+                        onMouseOver={e=>{e.currentTarget.style.borderColor="#0891b2";e.currentTarget.style.color="#7dd3fc";}}
+                        onMouseOut={e=>{e.currentTarget.style.borderColor="#1e2a3a";e.currentTarget.style.color="#3a5a7a";}}>
+                        🔑
+                      </button>
+                      {/* Delete */}
+                      <button onClick={()=>removeUser(u.name)}
+                        style={{background:"transparent",border:"1px solid #450a0a",color:"#6b1a1a",padding:"5px 9px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}
+                        onMouseOver={e=>{e.currentTarget.style.background="#450a0a";e.currentTarget.style.color="#fca5a5";}}
+                        onMouseOut={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color="#6b1a1a";}}>
+                        ✕
+                      </button>
+                    </div>
+                    {/* Inline password editor */}
+                    {isEditingPass&&(
+                      <div style={{borderTop:"1px solid #162032",padding:"10px 14px",background:"#060c14",display:"flex",gap:8,alignItems:"center"}}>
+                        <span style={{fontSize:11,color:"#1e3a5f",whiteSpace:"nowrap"}}>Nueva contraseña:</span>
+                        <div style={{position:"relative",flex:1}}>
+                          <input value={editPass[u.name]||""} onChange={e=>setEditPass(p=>({...p,[u.name]:e.target.value}))}
+                            type={showPass[u.name]?"text":"password"} placeholder="Nueva contraseña"
+                            style={{width:"100%",background:"#0b1422",border:"1px solid #162032",color:"#dde6f0",padding:"7px 34px 7px 10px",borderRadius:6,fontSize:12,outline:"none",fontFamily:"inherit"}}
+                            onFocus={e=>e.target.style.borderColor="#22d3ee"} onBlur={e=>e.target.style.borderColor="#162032"}/>
+                          <button onClick={()=>setShowPass(p=>({...p,[u.name]:!p[u.name]}))} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:"#3a5a7a",cursor:"pointer",fontSize:12,padding:0}}>
+                            {showPass[u.name]?"🙈":"👁"}
+                          </button>
+                        </div>
+                        <Btn primary onClick={()=>updatePassword(u.name,editPass[u.name]||"")} disabled={!(editPass[u.name]||"").trim()}>Guardar</Btn>
+                        <Btn ghost onClick={()=>setEditPass(p=>Object.fromEntries(Object.entries(p).filter(([k])=>k!==u.name)))}>✕</Btn>
+                      </div>
+                    )}
                   </div>
-                  <select value={u.role} onChange={e=>setUserRole(u.name,e.target.value)}
-                    style={{background:"#060c14",border:"1px solid #162032",color:"#94a3b8",padding:"5px 8px",borderRadius:6,fontSize:11,outline:"none",fontFamily:"inherit",cursor:"pointer"}}>
-                    <option value="hotdesk">💻 Hotdesk</option>
-                    <option value="fixed">📌 Puesto fijo</option>
-                  </select>
-                  <button onClick={()=>removeUser(u.name)}
-                    style={{background:"transparent",border:"1px solid #450a0a",color:"#6b1a1a",padding:"5px 10px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}
-                    onMouseOver={e=>{e.currentTarget.style.background="#450a0a";e.currentTarget.style.color="#fca5a5";}}
-                    onMouseOut={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color="#6b1a1a";}}>
-                    Eliminar
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
+
+          <div style={{marginTop:16,padding:"10px 14px",background:"#0a0f1a",border:"1px solid #162032",borderRadius:8,fontSize:11,color:"#1e3a5f"}}>
+            💡 Credenciales por defecto del sistema: <span style={{color:"#2a4060"}}>Admin / admin</span>
+          </div>
         </div>
       )}
     </div>
@@ -583,31 +683,67 @@ function QuickAdminModal({sid,iso,db,stOf,resOf,onToggle,onRelease,onClose}){
   );
 }
 
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
 function LoginScreen({db,onLogin}){
-  const[n,setN]=useState(""),[ r,setR]=useState("user");
-  function go(){if(n.trim())onLogin({name:n.trim(),role:r});}
+  const[name,setName]=useState("");
+  const[pass,setPass]=useState("");
+  const[showPass,setShowPass]=useState(false);
+  const[error,setError]=useState("");
+
+  function go(){
+    if(!name.trim()||!pass.trim())return;
+    const found=(db.users||[]).find(u=>u.name.toLowerCase()===name.trim().toLowerCase());
+    if(!found){setError("Usuario no encontrado.");return;}
+    if(found.password!==pass){setError("Contraseña incorrecta.");return;}
+    onLogin({name:found.name,role:found.role});
+  }
+
   return(
     <div style={{background:"#080e17",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Outfit',system-ui,sans-serif"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap');@keyframes hdUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap');@keyframes hdUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes hdShake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}`}</style>
       <div style={{background:"#0b1422",border:"1px solid #162032",borderRadius:16,padding:40,width:"100%",maxWidth:380,animation:"hdUp .3s ease",boxShadow:"0 32px 80px rgba(0,0,0,.7)"}}>
         <div style={{textAlign:"center",marginBottom:32}}>
           <div style={{fontSize:44,fontWeight:800,letterSpacing:-1,marginBottom:6,color:"#dde6f0"}}><span style={{color:"#22d3ee"}}>Hot</span>Desk</div>
           <div style={{color:"#1e3a5f",fontSize:10,letterSpacing:3,fontWeight:700}}>SISTEMA DE RESERVA DE PUESTOS</div>
         </div>
-        <div style={{fontSize:10,color:"#1e3a5f",fontWeight:700,letterSpacing:1,marginBottom:6}}>NOMBRE</div>
-        <input value={n} onChange={e=>setN(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="Tu nombre completo" autoFocus style={{width:"100%",background:"#060c14",border:"1px solid #162032",color:"#dde6f0",padding:"11px 14px",borderRadius:8,fontSize:15,outline:"none",marginBottom:20,fontFamily:"inherit"}} onFocus={e=>e.target.style.borderColor="#22d3ee"} onBlur={e=>e.target.style.borderColor="#162032"}/>
-        <div style={{fontSize:10,color:"#1e3a5f",fontWeight:700,letterSpacing:1,marginBottom:8}}>ROL</div>
-        <div style={{display:"flex",gap:8,marginBottom:28}}>
-          {[["user","👤 Usuario"],["admin","⚙ Administrador"]].map(([v,l])=>(
-            <button key={v} onClick={()=>setR(v)} style={{flex:1,padding:"10px",borderRadius:8,fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",background:r===v?(v==="admin"?"#1a0930":"#041e2c"):"#060c14",border:"1px solid "+(r===v?(v==="admin"?"#4c1d95":"#075985"):"#162032"),color:r===v?(v==="admin"?"#c4b5fd":"#67e8f9"):"#1e3a5f"}}>{l}</button>
-          ))}
+
+        <div style={{fontSize:10,color:"#1e3a5f",fontWeight:700,letterSpacing:1,marginBottom:6}}>USUARIO</div>
+        <input value={name} onChange={e=>{setName(e.target.value);setError("");}} onKeyDown={e=>e.key==="Enter"&&go()}
+          placeholder="Tu nombre de usuario" autoFocus
+          style={{width:"100%",background:"#060c14",border:"1px solid "+(error?"#7f1d1d":"#162032"),color:"#dde6f0",padding:"11px 14px",borderRadius:8,fontSize:15,outline:"none",marginBottom:14,fontFamily:"inherit"}}
+          onFocus={e=>e.target.style.borderColor=error?"#dc2626":"#22d3ee"} onBlur={e=>e.target.style.borderColor=error?"#7f1d1d":"#162032"}/>
+
+        <div style={{fontSize:10,color:"#1e3a5f",fontWeight:700,letterSpacing:1,marginBottom:6}}>CONTRASEÑA</div>
+        <div style={{position:"relative",marginBottom:error?10:24}}>
+          <input value={pass} onChange={e=>{setPass(e.target.value);setError("");}} onKeyDown={e=>e.key==="Enter"&&go()}
+            placeholder="Contraseña" type={showPass?"text":"password"}
+            style={{width:"100%",background:"#060c14",border:"1px solid "+(error?"#7f1d1d":"#162032"),color:"#dde6f0",padding:"11px 42px 11px 14px",borderRadius:8,fontSize:15,outline:"none",fontFamily:"inherit"}}
+            onFocus={e=>e.target.style.borderColor=error?"#dc2626":"#22d3ee"} onBlur={e=>e.target.style.borderColor=error?"#7f1d1d":"#162032"}/>
+          <button onClick={()=>setShowPass(v=>!v)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:"#2a4060",cursor:"pointer",fontSize:16,padding:2}}>
+            {showPass?"🙈":"👁"}
+          </button>
         </div>
-        <button onClick={go} style={{width:"100%",padding:12,borderRadius:8,background:n.trim()?"#0c4a6e":"#060c14",border:"1px solid "+(n.trim()?"#0891b2":"#162032"),color:n.trim()?"#bae6fd":"#1e3a5f",fontSize:15,fontWeight:600,cursor:n.trim()?"pointer":"not-allowed",fontFamily:"inherit"}}>Entrar →</button>
+
+        {error&&(
+          <div style={{background:"#1a0505",border:"1px solid #7f1d1d",borderRadius:7,padding:"8px 12px",marginBottom:16,fontSize:12,color:"#fca5a5",animation:"hdShake .3s ease"}}>
+            ⚠ {error}
+          </div>
+        )}
+
+        <button onClick={go} disabled={!name.trim()||!pass.trim()}
+          style={{width:"100%",padding:12,borderRadius:8,background:(name.trim()&&pass.trim())?"#0c4a6e":"#060c14",border:"1px solid "+((name.trim()&&pass.trim())?"#0891b2":"#162032"),color:(name.trim()&&pass.trim())?"#bae6fd":"#1e3a5f",fontSize:15,fontWeight:600,cursor:(name.trim()&&pass.trim())?"pointer":"not-allowed",fontFamily:"inherit",transition:"all .12s"}}>
+          Entrar →
+        </button>
+
+        <div style={{marginTop:20,padding:"10px 12px",background:"#060c14",border:"1px solid #0a1525",borderRadius:7,fontSize:11,color:"#1e3a5f",textAlign:"center"}}>
+          Acceso por defecto: <span style={{color:"#2a4060"}}>Admin / admin</span>
+        </div>
       </div>
     </div>
   );
 }
 
+// ─── SHARED COMPONENTS ────────────────────────────────────────────────────────
 function Dot({c,l}){return <span style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#3a5a7a"}}><span style={{width:9,height:9,borderRadius:2,background:c,display:"inline-block"}}/>{l}</span>;}
 function Tag({children}){return <div style={{fontSize:10,color:"#1e4d6a",fontWeight:700,letterSpacing:2,marginBottom:8}}>{children}</div>;}
 function Title({children}){return <div style={{fontSize:22,fontWeight:700,marginBottom:4}}>{children}</div>;}
@@ -625,7 +761,7 @@ function Overlay({onClose,children}){
   );
 }
 
-const GS=`@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap');*{box-sizing:border-box}@keyframes hdUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes hdFade{from{opacity:0}to{opacity:1}}@keyframes hdSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}.hd-seat{cursor:pointer;transition:filter .12s}.hd-seat:hover{filter:brightness(1.4) drop-shadow(0 0 6px rgba(100,220,255,.5))}.hd-cell{cursor:pointer;transition:opacity .12s}.hd-cell:hover{opacity:.65}select option{background:#0b1422}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:#0b1422}::-webkit-scrollbar-thumb{background:#162032;border-radius:3px}`;
+const GS=`@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap');*{box-sizing:border-box}@keyframes hdUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes hdFade{from{opacity:0}to{opacity:1}}@keyframes hdSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes hdShake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}.hd-seat{cursor:pointer;transition:filter .12s}.hd-seat:hover{filter:brightness(1.4) drop-shadow(0 0 6px rgba(100,220,255,.5))}.hd-cell{cursor:pointer;transition:opacity .12s}.hd-cell:hover{opacity:.65}select option{background:#0b1422}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:#0b1422}::-webkit-scrollbar-thumb{background:#162032;border-radius:3px}`;
 const NB={background:"#0b1422",border:"1px solid #162032",color:"#64748b",padding:"6px 11px",borderRadius:7,fontSize:13,cursor:"pointer",outline:"none"};
 const CB={background:"#060c14",border:"1px solid #162032",color:"#4a7090",width:28,height:28,borderRadius:6,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"};
 const TH={padding:"7px 4px",textAlign:"center",borderBottom:"2px solid #162032",color:"#1e3a5f",fontWeight:700,fontSize:11};
